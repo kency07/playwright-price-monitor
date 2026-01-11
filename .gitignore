@@ -1,0 +1,22 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+venv/
+env/
+.venv/
+.vscode
+
+
+# Logs and temporary files
+*.log
+*.tmp
+.DS_Store
+
+# Project specific
+prices.csv
+test.py
+README.md
