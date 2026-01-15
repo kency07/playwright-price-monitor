@@ -24,9 +24,15 @@ async def montior():
             notify(f"[CHECK] current price: {current_price}")
 
             if status == "price_dropped":
-                notify(f" 📉 PRICE DROPPED from {last_price} -> {current_price}")
+                notify(
+                    f" 📉 PRICE DROPPED from {last_price} -> {current_price}",
+                    email=True
+                       )
             elif status == "price_increased":
-                notify(f"📈 PRICE INCREASED from {last_price} -> {current_price}")    
+                notify(
+                    f"📈 PRICE INCREASED from {last_price} -> {current_price}",
+                    email=True
+                    )    
             elif status == "first_check":
                  notify("FIRST price recorded ")
             
