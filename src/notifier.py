@@ -1,14 +1,16 @@
+import asyncio
+import logging
 import os
 import smtplib
 from email.message import EmailMessage
-from datetime import datetime
+from time import time
 from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv()
+_EMAIL_QUEUE = []
 
-ALERT_LOG: Path = Path("data/alerts.log")
 LAST_EMAIL_FILE: Path = Path("data/last_email_sent.txt")
 
 EMAIL_ENABLED: bool = os.getenv("EMAIL_ENABLED", "false").lower() == "true"
@@ -22,7 +24,7 @@ EMAIL_TO: Optional[str] = os.getenv("EMAIL_TO")
 EMAIL_INTERVAL_SECONDS: int = int(os.getenv("EMAIL_INTERVAL_SECONDS", "900"))
 
 
-def is_emai_config_valid() -> bool:
+def is_emaiL_config_valid() -> bool:
     """Check if all required email configuration values are set."""
     return all([SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, EMAIL_TO])
 
@@ -36,72 +38,90 @@ def can_send_email() -> bool:
 
     try:
         last_sent = float(LAST_EMAIL_FILE.read_text().strip())
-        elapsed = datetime.now().timestamp() - last_sent
+        elapsed = time() - last_sent
         return elapsed >= EMAIL_INTERVAL_SECONDS
-    except Exception:
-        # If file is corrupted, allow email
+    except Exception as exc:
+        logging.warning(
+            f"Email timestamp file corrupted: {exc}"
+        )  # If file is corrupted, allow email
         return True
 
 
 def record_email_sent() -> None:
     """Save current timestamp after sending email."""
     LAST_EMAIL_FILE.parent.mkdir(parents=True, exist_ok=True)
-    LAST_EMAIL_FILE.write_text(str(datetime.now().timestamp()))
+    LAST_EMAIL_FILE.write_text(str(time()))
 
 
-def send_email(subject: str, body: str) -> None:
+def _perform_actual_send(subject: str, body: str) -> None:
     """
     Send an email notification if email alerts are enabled
     and configuration is complete.
     """
-    if not EMAIL_ENABLED:
+
+    if not is_emaiL_config_valid():
+        logging.error("Email settings are incomplete. Skipping email.")
         return
 
-    if not is_emai_config_valid():
-        print("Email settings are incomplete. Skipping email.")
+    msg = EmailMessage()
+    msg["From"] = SMTP_USER
+    msg["To"] = EMAIL_TO
+    msg["Subject"] = subject
+    msg.set_content(body)
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASSWORD)
+        server.send_message(msg)
+
+
+def flush_email_queue() -> None:
+    """
+    Sends all queued messages in one single email if the rate limit allows.
+    """
+    global _EMAIL_QUEUE
+
+    if not _EMAIL_QUEUE:
         return
+    if not EMAIL_ENABLED:
+        _EMAIL_QUEUE.clear()
+        return 
 
     if not can_send_email():
-        print("Email rate limit reached. Skipping email.")
+        logging.info(f"Email rate limit activ. {len(_EMAIL_QUEUE)} alerts pending.")
         return
+    # Combine all messages into one body
+    email_body = "\n".join(_EMAIL_QUEUE)
+    subject = f"Price Monitor Alert:{len(_EMAIL_QUEUE)} update"
 
     try:
-        msg = EmailMessage()
-        msg["From"] = SMTP_USER
-        msg["To"] = EMAIL_TO
-        msg["Subject"] = subject
-        msg.set_content(body)
-
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASSWORD)
-            server.send_message(msg)
+        _perform_actual_send(subject, email_body)
+        _EMAIL_QUEUE.clear()
         record_email_sent()
+        logging.info("Batch email sent successfully")
+    except Exception:
+        logging.exception(f"Email sending failed")
 
-    except Exception as exc:
-        print(f"Email sending failed: {exc}")
+
+async def email_manager():
+    """
+    Background task to periodically check and send queued emails.
+    """
+    while True:
+        try:
+            flush_email_queue()
+        except Exception:
+            logging.exception("email manager crashed")   
+        await asyncio.sleep(60)
 
 
 def notify(message: str, email: bool = False) -> None:
     """
     Log a notification message to console and file.
-    Optionally send it via email.
+    Optionally queue it for email.
     """
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    formatted = f"[{timestamp}]  {message}"
-
-    # Console notification
-    print(formatted)
-
-    # File notification
-    try:
-        ALERT_LOG.parent.mkdir(parents=True, exist_ok=True)
-        with ALERT_LOG.open("a", encoding="utf-8") as f:
-            f.write(formatted + "\n")
-
-    except Exception as exc:
-        print(f"Log write failed: {exc}")
+    logging.info(message)
 
     # Email(only if  requested)
     if email:
-        send_email(subject="Price Monitor Alert", body=formatted)
+        _EMAIL_QUEUE.append(message)
