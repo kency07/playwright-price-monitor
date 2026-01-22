@@ -2,15 +2,35 @@ from logging_config import setup_logging
 
 setup_logging()
 import asyncio
-from data.products_list import PRODUCTS, CHECK_INTERVAL
+import json
 from src.browser_manager import browser_manager
 from src.scraper import fetch_price_with_browser
-from src.utils import normalized_price, is_connected
+from src.utils import normalize_price, is_connected, validate_products
 from src.monitor import check_price
 from src.notifier import notify, email_manager
 import logging
+from pathlib import Path
+
 
 sem = asyncio.Semaphore(5)  # Only 5 concurrent browser pages at a time
+
+
+def load_products():
+    try:
+        return json.loads(Path("data/products.json").read_text())
+    except FileNotFoundError:
+        logging.exception("data/products.json not found")
+        raise SystemExit(1)
+    except json.JSONDecodeError:
+        logging.exception("data/products.json is invalid")
+        raise SystemExit(1)
+
+
+config = load_products()
+
+CHECK_INTERVAL = config.get("check_interval", 60)
+PRODUCTS = config["products"]
+validate_products(PRODUCTS)
 
 
 async def monitor_product(browser, product):
@@ -26,10 +46,12 @@ async def monitor_product(browser, product):
                 await asyncio.sleep(CHECK_INTERVAL)
                 continue
 
-            current_price = normalized_price(raw_price)
+            current_price = normalize_price(raw_price)
 
             if current_price is None:
-                logging.warning(f"{product['id']} price could not be normalized, skipping")
+                logging.warning(
+                    f"{product['id']} price could not be normalized, skipping"
+                )
                 await asyncio.sleep(CHECK_INTERVAL)
                 continue
 
@@ -65,7 +87,12 @@ async def main():
 
     async with browser_manager() as browser:
         task = [
-            asyncio.create_task(monitor_product(browser, product))
+            asyncio.create_task(
+                monitor_product(
+                    browser,
+                    product,
+                )
+            )
             for product in PRODUCTS
         ]
         task.append(asyncio.create_task(email_manager()))
@@ -76,8 +103,9 @@ async def main():
             # Cancel all running monitoring tasks
             for t in task:
                 t.cancel()
-            await asyncio.gather(*task, return_exceptions= True)
+            await asyncio.gather(*task, return_exceptions=True)
             logging.info("All monitoring tasks cancelled.")
+            raise
 
 
 if __name__ == "__main__":

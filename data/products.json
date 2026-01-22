@@ -1,0 +1,17 @@
+{
+  "check_interval": 60,
+  "products": [
+    {
+      "id": "product_1",
+      "url": "https://www.example.com/dp/PRODUCT_ID_1",
+      "platform": "example",
+      "price_selector": "#span.a-price"
+    },
+    {
+      "id": "product_2",
+      "url": "https://www.example.com/dp/PRODUCT_ID_2",
+      "platform": "example",
+      "price_selector": "#span.a-price"
+    }
+  ]
+}

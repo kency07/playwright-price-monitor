@@ -11,14 +11,14 @@ async def browser_manager(headless: bool = True):
     """
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await p.chromium.launch(headless=headless)
         try:
             yield browser
         finally:
             try:
                 await browser.close()  # ensures cleanup even on exceptions
             except asyncio.CancelledError:
-                pass
+                pass   # intentional: suppress Ctrl+C noise during shutdown
 
             except Exception:
                 logging.exception("Failed to close Playwright browser")

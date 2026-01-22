@@ -17,7 +17,7 @@ env/
 .DS_Store
 
 # Project specific
-prices.csv
 test.py
-README.md
 future_impre.md
+
+

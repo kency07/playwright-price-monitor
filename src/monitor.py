@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import logging
+from typing import Optional
 
 DATA_FILE = Path("data/prices.json")
 
@@ -21,6 +22,7 @@ def load_prices():
         return {}
     except Exception:
         logging.exception("Failed to load prices file")
+        return {}
 
 
 def save_prices(data):
@@ -29,10 +31,10 @@ def save_prices(data):
         with DATA_FILE.open("w", encoding="utf-8") as f:
             json.dump(data, f, indent=4)
     except Exception:
-        logging.exception("failed to save prices")
+        logging.exception("Failed to save prices")
 
 
-def check_price(product_id: str, current_price: float):
+def check_price(product_id: str, current_price: float)->{Optional[float], str} :
     prices = load_prices()
     last_price = prices.get(product_id)
 

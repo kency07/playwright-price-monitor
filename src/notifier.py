@@ -10,6 +10,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 _EMAIL_QUEUE = []
+MAX_EMAIL_QUEUE = 100
+SMTP_FAILURES = 0
+MAX_SMTP_FAILURES = 5
+
 
 LAST_EMAIL_FILE: Path = Path("data/last_email_sent.txt")
 
@@ -24,7 +28,7 @@ EMAIL_TO: Optional[str] = os.getenv("EMAIL_TO")
 EMAIL_INTERVAL_SECONDS: int = int(os.getenv("EMAIL_INTERVAL_SECONDS", "900"))
 
 
-def is_emaiL_config_valid() -> bool:
+def is_email_config_valid() -> bool:
     """Check if all required email configuration values are set."""
     return all([SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, EMAIL_TO])
 
@@ -58,21 +62,33 @@ def _perform_actual_send(subject: str, body: str) -> None:
     Send an email notification if email alerts are enabled
     and configuration is complete.
     """
-
-    if not is_emaiL_config_valid():
+    global SMTP_FAILURES
+    if not is_email_config_valid():
         logging.error("Email settings are incomplete. Skipping email.")
+        _EMAIL_QUEUE.clear()
         return
+    try:
+        msg = EmailMessage()
+        msg["From"] = SMTP_USER
+        msg["To"] = EMAIL_TO
+        msg["Subject"] = subject
+        msg.set_content(body)
 
-    msg = EmailMessage()
-    msg["From"] = SMTP_USER
-    msg["To"] = EMAIL_TO
-    msg["Subject"] = subject
-    msg.set_content(body)
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.send_message(msg)
 
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
-        server.starttls()
-        server.login(SMTP_USER, SMTP_PASSWORD)
-        server.send_message(msg)
+        SMTP_FAILURES = 0 # success → reset
+    except smtplib.SMTPAuthenticationError:
+         # PERMANENT until user fixes config
+         SMTP_FAILURES += 1
+         logging.error("SMTP authentication failed. Disabling email alerts.")
+         _EMAIL_QUEUE.clear()
+         raise
+    except smtplib.SMTPException as e:
+        SMTP_FAILURES += 1
+        logging.warning("Temporary SMTP error: %s", e)
 
 
 def flush_email_queue() -> None:
@@ -85,14 +101,18 @@ def flush_email_queue() -> None:
         return
     if not EMAIL_ENABLED:
         _EMAIL_QUEUE.clear()
-        return 
+        return
 
+    if SMTP_FAILURES >= MAX_SMTP_FAILURES:
+        logging.error("SMTP appears broken. Disabling email alerts.")
+        _EMAIL_QUEUE.clear()
+        return
     if not can_send_email():
-        logging.info(f"Email rate limit activ. {len(_EMAIL_QUEUE)} alerts pending.")
+        logging.info(f"Email rate limit active. {len(_EMAIL_QUEUE)} alerts pending.")
         return
     # Combine all messages into one body
     email_body = "\n".join(_EMAIL_QUEUE)
-    subject = f"Price Monitor Alert:{len(_EMAIL_QUEUE)} update"
+    subject = f"Price Monitor Alert: {len(_EMAIL_QUEUE)} updates"
 
     try:
         _perform_actual_send(subject, email_body)
@@ -110,8 +130,11 @@ async def email_manager():
     while True:
         try:
             flush_email_queue()
+        except asyncio.CancelledError:
+            logging.info("email manager stopped")
+            raise
         except Exception:
-            logging.exception("email manager crashed")   
+            logging.exception("email manager crashed")
         await asyncio.sleep(60)
 
 
@@ -124,4 +147,7 @@ def notify(message: str, email: bool = False) -> None:
 
     # Email(only if  requested)
     if email:
+        if len(_EMAIL_QUEUE) >= MAX_EMAIL_QUEUE:
+            logging.warning("Email queue full. Dropping oldest alert.")
+            _EMAIL_QUEUE.pop(0)
         _EMAIL_QUEUE.append(message)
